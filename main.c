@@ -32,6 +32,15 @@ struct input_data {
     Darray residuals_predictions;
 };
 
+struct data {
+    float* y;
+    float* old_y;
+    float* og_y;
+    float* x;
+    float* residuals;
+    float* residuals_predictions;
+};
+
 void init_array(Darray* arr, size_t initial_size)
 {
     if (initial_size < 1) {
@@ -81,7 +90,7 @@ int get_n_columns(char* line)
 
 int get_n_rows(FILE* fp)
 {
-	char* line;
+	char* line = NULL;
 	size_t line_len;
 	int rows = 1;
 
@@ -148,52 +157,72 @@ int main(int argc, char* argv[])
     learning_rate = 0.8;
     // columns are x and y
 
-    struct input_data inn;
+    // struct input_data inn;
 
-    init_array(&inn.x, 0);
-    init_array(&inn.y, 0);
-    init_array(&inn.og_y, 0);
-    init_array(&inn.old_y, 0);
-    init_array(&inn.residuals, 0);
-    init_array(&inn.residuals_predictions, 0);
+	float x[rows];
+	float y[rows];
+	float og_y[rows];
+	float old_y[rows];
+	float residuals[rows];
+	float residuals_predictions[rows];
 
-    while (getline(&line, &line_len, fp) != -1) {
-        for (int i = 1; i <= 2; i++) {
+	for (int i = 0; i < rows; i++) {
+		x[i] = 0;
+		y[i] = 0;
+		og_y[i] = 0;
+		old_y[i] = 0;
+		residuals[i] = 0;
+		residuals_predictions[i] = 0;
+	}
+
+    // init_array(&inn.x, 0);
+    // init_array(&inn.y, 0);
+    // init_array(&inn.og_y, 0);
+    // init_array(&inn.old_y, 0);
+    // init_array(&inn.residuals, 0);
+    // init_array(&inn.residuals_predictions, 0);
+	
+	// not placing element in array
+
+    for (int i = 0; getline(&line, &line_len, fp) != -1; i++) {
+        for (int j = 1; j <= 2; j++) {
             char* tmp = strdup(line);
-            float el = atof(get_csv_element(tmp, i));
+            float el = atof(get_csv_element(tmp, j));
 
-            if (i == 1) {
-                add_element(&inn.y, el);
-                add_element(&inn.og_y, el);
+            if (j == 1) {
+				y[i] = el;
+				og_y[i] = el;
             }
-            if (i == 2) {
-                add_element(&inn.x, el);
+            if (j == 2) {
+				x[i] = el;
             }
             free(tmp);
         }
     }
 
-    for (int i = 0; i < inn.og_y.occupied; i++) {
-        add_element(&inn.old_y, 0);
-        add_element(&inn.residuals, 0);
-        add_element(&inn.residuals_predictions, 0);
-    }
+	free(line);
+
+    // for (int i = 0; i < rows; i++) {
+    //     add_element(&inn.old_y, 0);
+    //     add_element(&inn.residuals, 0);
+    //     add_element(&inn.residuals_predictions, 0);
+    // }
 
     // calculate mean
-    for (int i = 0; i < inn.og_y.occupied; i++) {
-        x_sum += inn.x.values[i];
-        y_sum += inn.y.values[i];
+    for (int i = 0; i < rows; i++) {
+        x_sum += x[i];
+        y_sum += y[i];
     }
 
-    y_mean = y_sum / inn.og_y.occupied;
-    x_mean = x_sum / inn.og_y.occupied;
+    y_mean = y_sum / rows;
+    x_mean = x_sum / rows;
     // x y residual predicted_residuals
 
     // set mean and y as mean
-    for (int i = 0; i < inn.og_y.occupied; i++) {
-        inn.old_y.values[i] = inn.y.values[i];
-        inn.y.values[i] = y_mean;
-        inn.residuals.values[i] = inn.old_y.values[i] - inn.y.values[i];
+    for (int i = 0; i < rows; i++) {
+        old_y[i] = y[i];
+        y[i] = y_mean;
+        residuals[i] = old_y[i] - y[i];
     }
 
     time_t secs = TRAIN_TIME;
@@ -203,11 +232,11 @@ int main(int argc, char* argv[])
         // calculate residuals
         float left_sum = 0, right_sum = 0;
 
-        for (int i = 0; i < inn.og_y.occupied; i++) {
-            if (inn.x.values[i] < x_mean) {
-                left_sum += inn.residuals.values[i];
+        for (int i = 0; i < rows; i++) {
+            if (x[i] < x_mean) {
+                left_sum += residuals[i];
             } else {
-                right_sum += inn.residuals.values[i];
+                right_sum += residuals[i];
             }
         }
 
@@ -215,83 +244,110 @@ int main(int argc, char* argv[])
         // float right_pred = (right_count > 0) ? right_sum / right_count : 0;
 
         int max_leaves = round(pow(2, DEPTH));
-        Darray save_leaves[DEPTH][max_leaves];
+        float* save_leaves[DEPTH][max_leaves];
         float save_means[DEPTH][max_leaves];
+		int save_n[DEPTH][max_leaves];
 
-        for (int depth = 0; depth < DEPTH; depth++) {
-            for (int j = 0; j < round(pow(2, depth + 1)); j++) {
-                init_array(&save_leaves[depth][j], 0);
-            }
-        }
 
-        save_leaves[0][0] = inn.x;
+		for (int i = 0; i < DEPTH; i++) {
+			for (int j = 0; j < max_leaves; j++) {
+				save_n[i][j] = 0;
+				save_means[i][j] = 0;
+				save_leaves[i][j] = x;
+			}
+		}
 
+		save_n[0][0] = rows;
+
+        // for (int depth = 0; depth < DEPTH; depth++) {
+        //     for (int j = 0; j < round(pow(2, depth + 1)); j++) {
+        //         init_array(&save_leaves[depth][j], 0);
+        //     }
+        // }
+
+        save_leaves[0][0] = x;
 
         for (int depth = 1; depth < DEPTH; depth++) {
             int l = round(pow(2, depth));
 
-            Darray leaves[l];
-
-            for (int i = 0; i < l; i++) {
-                init_array(&leaves[i], 0);
-            }
+            // for (int i = 0; i < l; i++) {
+            //     init_array(&leaves[i], 0);
+            // }
 
             // for the number of leafs in x depth
             for (int n_leaves = 0; n_leaves < l; n_leaves++) {
                 // find mean
                 float leaf_sum = 0, leaf_mean = 0;
 
-                for (int i = 0; i < save_leaves[depth - 1][n_leaves].occupied; i++) {
-                    leaf_sum += save_leaves[depth - 1][n_leaves].values[i];
+                for (int i = 0; i < save_n[depth - 1][n_leaves]; i++) {
+                    leaf_sum += save_leaves[depth - 1][n_leaves][i];
                 }
 
-                leaf_mean = leaf_sum / save_leaves[depth - 1][n_leaves].occupied;
+                leaf_mean = leaf_sum / save_n[depth - 1][n_leaves];
                 save_means[depth - 1][n_leaves] = leaf_mean;
 
                 // and split elements for the next depth
-                for (int i = 0; i < save_leaves[depth - 1][n_leaves].occupied; i++) {
+                for (int i = 0; i < save_n[depth - 1][n_leaves]; i++) {
                     int leaf_pos = (n_leaves + 1) * 2 - 1;
+					int l_count = 0;
+					int r_count = 0;
 
-                    if (save_leaves[depth - 1][n_leaves].values[i] < leaf_mean) {
+                    if (save_leaves[depth - 1][n_leaves][i] < leaf_mean) {
                         // left branch
-                        add_element(&save_leaves[depth][leaf_pos - 1], save_leaves[depth - 1][n_leaves].values[i]);
+                        // add_element(&save_leaves[depth][leaf_pos - 1], save_leaves[depth - 1][n_leaves].values[i]);
+						save_leaves[depth][leaf_pos - 1][l_count] = save_leaves[depth - 1][n_leaves][i];
+
+						l_count++;
+						save_n[depth][leaf_pos - 1]++;
                     } else {
                         // right branch
-                        add_element(&save_leaves[depth][leaf_pos], save_leaves[depth - 1][n_leaves].values[i]);
+                        // add_element(&save_leaves[depth][leaf_pos], save_leaves[depth - 1][n_leaves].values[i]);
+						printf("curr depth %d leaf %d i %d r_count %d leaf_pos %d\n", depth, n_leaves, i, r_count, leaf_pos);
+						printf("trying to assign %f to the leaf\n", save_leaves[depth-1][n_leaves][i]);
+						printf("the leaf contains %f\n", save_leaves[depth][leaf_pos][r_count]);
+						save_leaves[depth][leaf_pos][r_count] = save_leaves[depth - 1][n_leaves][i];
+
+						r_count++;
+						save_n[depth][leaf_pos]++;
                     }
+
+					return 0;
                 }
             }
         }
 
-        float save_pseudo_residuals[inn.x.occupied];
 
-        // for each x
-        for (int i = 0; i < inn.x.occupied; i++) {
-            int end, current_leaf = 0;
-            float current_mean = 0;
+			//
+			//      float save_pseudo_residuals[inn.x.occupied];
+			//
+			//      // for each x
+			//      for (int i = 0; i < inn.x.occupied; i++) {
+			//          int end, current_leaf = 0;
+			//          float current_mean = 0;
+			//
+			//          for (int depth = 0; depth < DEPTH; depth++) {
+			//              int right_next_depth = current_leaf * 2 + 1;
+			// 	printf("occupied %lu\n", save_leaves[depth][current_leaf].occupied);
+			//              // check if there is a mean in this leaf
+			//              if (save_leaves[depth][current_leaf].occupied < 1) {
+			//                  break;
+			//              }
+			//
+			//              current_mean = save_means[depth][current_leaf];
+			//
+			//              // save the pseudo residuals
+			//              if (inn.x.values[i] < save_means[depth][current_leaf]) {
+			//                  current_leaf = right_next_depth - 1;
+			//              } else {
+			//                  current_leaf = right_next_depth;
+			//              }
+			//          }
+			//
+			//          save_pseudo_residuals[i] = current_mean;
+			// printf("%f save pseudo-residual, mean %f , current mean %f\n", save_pseudo_residuals[0], save_means[0][0], current_mean);
+			// return 0;
+			//      }
 
-            for (int depth = 0; depth < DEPTH; depth++) {
-                int right_next_depth = current_leaf * 2 + 1;
-				printf("occupied %lu\n", save_leaves[depth][current_leaf].occupied);
-                // check if there is a mean in this leaf
-                if (save_leaves[depth][current_leaf].occupied < 1) {
-                    break;
-                }
-
-                current_mean = save_means[depth][current_leaf];
-
-                // save the pseudo residuals
-                if (inn.x.values[i] < save_means[depth][current_leaf]) {
-                    current_leaf = right_next_depth - 1;
-                } else {
-                    current_leaf = right_next_depth;
-                }
-            }
-
-            save_pseudo_residuals[i] = current_mean;
-			printf("%f save pseudo-residual, mean %f , current mean %f\n", save_pseudo_residuals[0], save_means[0][0], current_mean);
-			return 0;
-        }
 
         /*
          *
@@ -358,8 +414,8 @@ int main(int argc, char* argv[])
         // }
     }
 
-    for (int i = 0; i < inn.og_y.occupied; i++) {
-        printf("real y %f\n", inn.og_y.values[i]);
-        printf("predicted y %f and old y %f\n", inn.y.values[i], inn.old_y.values[i]);
-    }
+    // for (int i = 0; i < inn.og_y.occupied; i++) {
+    //     printf("real y %f\n", inn.og_y.values[i]);
+    //     printf("predicted y %f and old y %f\n", inn.y.values[i], inn.old_y.values[i]);
+    // }
 }
