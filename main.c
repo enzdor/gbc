@@ -6,7 +6,7 @@
 
 */
 
-#include <ctype.h>
+#include <errno.h>
 #include <math.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -17,21 +17,6 @@
 #define TRAIN_TIME 2
 #define DEPTH 5 // number of stumps
 
-typedef struct {
-    float* values;
-    size_t occupied;
-    size_t capacity;
-} Darray;
-
-struct input_data {
-    Darray y;
-    Darray old_y;
-    Darray og_y;
-    Darray x;
-    Darray residuals;
-    Darray residuals_predictions;
-};
-
 struct data {
     float* y;
     float* old_y;
@@ -40,41 +25,6 @@ struct data {
     float* residuals;
     float* residuals_predictions;
 };
-
-void init_array(Darray* arr, size_t initial_size)
-{
-    if (initial_size < 1) {
-        initial_size = 1;
-    }
-
-    arr->values = malloc(initial_size * sizeof(float));
-    arr->occupied = 0;
-    arr->capacity = initial_size;
-}
-
-void add_element(Darray* arr, float element)
-{
-    if (arr->occupied >= arr->capacity) {
-        arr->capacity *= 2;
-        arr->values = realloc(arr->values, arr->capacity * sizeof(*arr->values));
-    }
-
-    arr->values[arr->occupied++] = element;
-}
-
-void delete_element(Darray* arr, float element)
-{
-    for (int i = 0; i < arr->occupied; i++) {
-        if (arr->values[i] == element) {
-            for (int j = i; j < arr->occupied; j++) {
-                arr->values[j] = arr->values[j + 1];
-            }
-            arr->occupied--;
-            arr->capacity--;
-            break;
-        }
-    }
-}
 
 int get_n_columns(char* line)
 {
@@ -93,6 +43,7 @@ int get_n_rows(FILE* fp)
 	char* line = NULL;
 	size_t line_len;
 	int rows = 1;
+	size_t read = 0;
 
     while (getline(&line, &line_len, fp) != -1) {
 		rows++;
@@ -117,7 +68,7 @@ const char* get_csv_element(char* line, int num)
 int main(int argc, char* argv[])
 {
     if (argc < 2) {
-        puts("not enough arguments");
+		fprintf(stderr, "usage: %s file.csv\n", argv[0]);
         exit(EXIT_FAILURE);
     }
 
@@ -125,14 +76,14 @@ int main(int argc, char* argv[])
     FILE* fp;
 
     if (access(argv[1], F_OK) != 0) {
-        puts("access");
-        return 1;
+		fprintf(stderr, "error in access: %s\n", strerror(errno));
+		exit(EXIT_FAILURE);
     }
 
     fp = fopen(argv[1], "r");
     if (fp == NULL) {
-        puts("fopen");
-        return 1;
+		fprintf(stderr, "error in fopen: %s\n", strerror(errno));
+		exit(EXIT_FAILURE);
     }
 
     char* line = NULL;
@@ -140,24 +91,24 @@ int main(int argc, char* argv[])
 
 	int err = getline(&line, &line_len, fp);
 	if (err == -1) {
-		puts("getline");
-		return 1;
+		if (line) {
+			free(line);
+		}
+		fclose(fp);
+		fprintf(stderr, "error in getline: %s\n", strerror(errno));
+		exit(EXIT_FAILURE);
 	}
 
 	// first col is y second is x
 	int cols = get_n_columns(line);
-	printf("%d cols\n", cols);
 
 	// number of observations
 	int rows = get_n_rows(fp);
-	printf("%d rows\n", rows);
 
     float y_sum = 0, x_sum = 0, y_mean, x_mean, learning_rate;
 	// x_l_mean, x_h_mean,
     learning_rate = 0.8;
     // columns are x and y
-
-    // struct input_data inn;
 
 	float x[rows];
 	float y[rows];
@@ -175,18 +126,22 @@ int main(int argc, char* argv[])
 		residuals_predictions[i] = 0;
 	}
 
-    // init_array(&inn.x, 0);
-    // init_array(&inn.y, 0);
-    // init_array(&inn.og_y, 0);
-    // init_array(&inn.old_y, 0);
-    // init_array(&inn.residuals, 0);
-    // init_array(&inn.residuals_predictions, 0);
-	
-	// not placing element in array
+	size_t read = 0;
+	line = NULL;
+	line_len = 0;
 
-    for (int i = 0; getline(&line, &line_len, fp) != -1; i++) {
+	rewind(fp);
+
+    for (int i = 0; (read = getline(&line, &line_len, fp)) != -1; i++) {
         for (int j = 1; j <= 2; j++) {
             char* tmp = strdup(line);
+			if (tmp == NULL) {
+				free(line);
+				fclose(fp);
+				fprintf(stderr, "error in strdup: %s\n", strerror(errno));
+				exit(EXIT_FAILURE);
+			}
+
             float el = atof(get_csv_element(tmp, j));
 
             if (j == 1) {
@@ -199,14 +154,14 @@ int main(int argc, char* argv[])
             free(tmp);
         }
     }
-
+	
 	free(line);
+	fclose(fp);
 
-    // for (int i = 0; i < rows; i++) {
-    //     add_element(&inn.old_y, 0);
-    //     add_element(&inn.residuals, 0);
-    //     add_element(&inn.residuals_predictions, 0);
-    // }
+	if (errno != 0) {
+		fprintf(stderr, "error in getline: %s\n", strerror(errno));
+		exit(EXIT_FAILURE);
+	}
 
     // calculate mean
     for (int i = 0; i < rows; i++) {
@@ -229,6 +184,7 @@ int main(int argc, char* argv[])
     time_t start_time = time(NULL);
 
     while (time(NULL) - start_time < secs) {
+		printf("hello! \n");
         // calculate residuals
         float left_sum = 0, right_sum = 0;
 
@@ -258,21 +214,10 @@ int main(int argc, char* argv[])
 		}
 
 		save_n[0][0] = rows;
-
-        // for (int depth = 0; depth < DEPTH; depth++) {
-        //     for (int j = 0; j < round(pow(2, depth + 1)); j++) {
-        //         init_array(&save_leaves[depth][j], 0);
-        //     }
-        // }
-
         save_leaves[0][0] = x;
 
         for (int depth = 1; depth < DEPTH; depth++) {
             int l = round(pow(2, depth));
-
-            // for (int i = 0; i < l; i++) {
-            //     init_array(&leaves[i], 0);
-            // }
 
             // for the number of leafs in x depth
             for (int n_leaves = 0; n_leaves < l; n_leaves++) {
@@ -294,24 +239,17 @@ int main(int argc, char* argv[])
 
                     if (save_leaves[depth - 1][n_leaves][i] < leaf_mean) {
                         // left branch
-                        // add_element(&save_leaves[depth][leaf_pos - 1], save_leaves[depth - 1][n_leaves].values[i]);
 						save_leaves[depth][leaf_pos - 1][l_count] = save_leaves[depth - 1][n_leaves][i];
 
 						l_count++;
 						save_n[depth][leaf_pos - 1]++;
                     } else {
                         // right branch
-                        // add_element(&save_leaves[depth][leaf_pos], save_leaves[depth - 1][n_leaves].values[i]);
-						printf("curr depth %d leaf %d i %d r_count %d leaf_pos %d\n", depth, n_leaves, i, r_count, leaf_pos);
-						printf("trying to assign %f to the leaf\n", save_leaves[depth-1][n_leaves][i]);
-						printf("the leaf contains %f\n", save_leaves[depth][leaf_pos][r_count]);
 						save_leaves[depth][leaf_pos][r_count] = save_leaves[depth - 1][n_leaves][i];
 
 						r_count++;
 						save_n[depth][leaf_pos]++;
                     }
-
-					return 0;
                 }
             }
         }
