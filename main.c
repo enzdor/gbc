@@ -17,6 +17,15 @@
 #define TRAIN_TIME 2
 #define DEPTH 5 // number of stumps
 
+struct node {
+    float* values;
+    float* residuals;
+    int size_v;
+    int size_r;
+    float mean;
+    float output_value;
+};
+
 int get_n_columns(char* line)
 {
     int n_cols = 0;
@@ -186,58 +195,69 @@ int main(int argc, char* argv[])
     /*
      *
      *
+     *
+     *
      * build the tree
+     *
+     *
+     *
+     *
      *
      *
      */
 
-    int max_leaves = round(pow(2, DEPTH));
-    float* save_leaves[DEPTH][max_leaves];
-    float save_means[DEPTH][max_leaves];
-    float save_output_value[DEPTH][max_leaves];
-    int save_n[DEPTH][max_leaves];
+    int max_nodes = round(pow(2, DEPTH));
+    struct node* tree[DEPTH];
 
-    for (int i = 0; i < DEPTH; i++) {
-        for (int j = 0; j < max_leaves; j++) {
-            save_n[i][j] = 0;
-            save_means[i][j] = 0;
-            save_leaves[i][j] = x;
-        }
-    }
+    struct node nodes_0[1] = {
+        { x, 0, rows, rows, 0, 0 }
+    };
 
-    save_n[0][0] = rows;
-    save_leaves[0][0] = x;
-    save_means[0][0] = x_mean;
+    nodes_0[0].mean = get_mean(nodes_0[0].values, nodes_0[0].size_v);
+
+    // float* save_nodes[DEPTH][max_nodes];
+    // float save_means[DEPTH][max_nodes];
+    // float save_output_value[DEPTH][max_nodes];
+    // int save_n[DEPTH][max_nodes];
+    // for (int i = 0; i < DEPTH; i++) {
+
+    //     for (int j = 0; j < max_nodes; j++) {
+    //         save_n[i][j] = 0;
+    //         save_means[i][j] = 0;
+    //         save_nodes[i][j] = x;
+    //     }
+    // }
+
+    // save_n[0][0] = rows;
+    // save_nodes[0][0] = x;
+    // save_means[0][0] = x_mean;
 
     for (int depth = 1; depth < DEPTH; depth++) {
         int l = round(pow(2, depth));
 
-        // for the number of leafs in x depth
-        for (int curr_leaf_pos = 0; curr_leaf_pos < l; curr_leaf_pos++) {
+        // for the number of nodes in x depth
+        for (int curr_node_pos = 0; curr_node_pos < l; curr_node_pos++) {
             // find mean
-            float leaf_mean = 0;
 
-            leaf_mean = get_mean(save_leaves[depth - 1][curr_leaf_pos], save_n[depth - 1][curr_leaf_pos]);
-            save_means[depth - 1][curr_leaf_pos] = leaf_mean;
+            tree[depth - 1][curr_node_pos].mean = get_mean(tree[depth - 1][curr_node_pos].values,
+                tree[depth - 1][curr_node_pos].size_v);
 
             // and split elements for the next depth
-            for (int i = 0; i < save_n[depth - 1][curr_leaf_pos]; i++) {
-                int next_leaf_pos = (curr_leaf_pos + 1) * 2 - 1;
+            for (int i = 0; i < tree[depth - 1][curr_node_pos].size_v; i++) {
+                int next_node_pos = (curr_node_pos + 1) * 2 - 1;
                 int l_count = 0;
                 int r_count = 0;
 
-                if (save_leaves[depth - 1][curr_leaf_pos][i] < leaf_mean) {
+                if (tree[depth - 1][curr_node_pos].values[i] < tree[depth - 1][curr_node_pos].mean) {
                     // left branch
-                    save_leaves[depth][next_leaf_pos - 1][l_count] = save_leaves[depth - 1][curr_leaf_pos][i];
-
+                    tree[depth][next_node_pos - 1].values[l_count] = tree[depth - 1][curr_node_pos].values[i];
+                    tree[depth][next_node_pos - 1].size_v++;
                     l_count++;
-                    save_n[depth][next_leaf_pos - 1]++;
                 } else {
                     // right branch
-                    save_leaves[depth][next_leaf_pos][r_count] = save_leaves[depth - 1][curr_leaf_pos][i];
-
+                    tree[depth][next_node_pos].values[r_count] = tree[depth - 1][curr_node_pos].values[i];
+                    tree[depth][next_node_pos].size_v++;
                     r_count++;
-                    save_n[depth][next_leaf_pos]++;
                 }
             }
         }
@@ -247,13 +267,24 @@ int main(int argc, char* argv[])
      *
      *
      *
-     * output value
+     *
+     *
+     * trim unused nodes
+     *
+     *
      *
      *
      *
      */
 
     /*
+     *
+     *
+     *
+     *
+     *
+     *
+     *
      *
      *
      *
@@ -276,49 +307,32 @@ int main(int argc, char* argv[])
         // top to bottom in a big ass for loop
         // save into an array
 
-        float* res_in_leaf[DEPTH][max_leaves];
+        // initialize res_in_node;
 
-        // initialize res_in_leaf;
-
-        res_in_leaf[0][0] = residuals;
+        tree[0][0].residuals = residuals;
 
         for (int i = 0; i < rows; i++) {
-            int curr_leaf = 0;
+            int curr_node = 0;
             for (int depth = 1; depth < DEPTH; depth++) {
-                if (x[i] < save_means[depth][curr_leaf]) {
-                    // add x to res_in_leaf
-
-                    curr_leaf = (curr_leaf + 1) * 2 - 2;
-                    if (save_n[depth][curr_leaf] < 1) {
-                        break;
-                    }
-                } else {
-                    curr_leaf++;
-                    // add x to res_in_leaf
-
-                    curr_leaf = (curr_leaf + 1) * 2 - 2;
-                    if (save_n[depth][curr_leaf] < 1) {
-                        break;
-                    }
+                if (x[i] > tree[depth][curr_node].mean) {
+                    curr_node++;
                 }
+
+                // add res of x to residuals in the current node
+                tree[depth][curr_node].values[tree[depth][curr_node].size_r++] = residuals[i];
+                curr_node = (curr_node + 1) * 2 - 2;
             }
         }
 
-        // 3. for each leaf, compute output value
-        // (mean of residuals in leaf)
-
-        float output_values[DEPTH][max_leaves];
-        for (int i = 0; i < DEPTH; i++) {
-            for (int j = 0; j < max_leaves; j++) {
-                output_values[i][j] = 0;
-            }
-        }
+        // 3. for each node, compute output value
+        // (mean of residuals in node)
 
         for (int depth = 0; depth < DEPTH; depth++) {
             int l = round(pow(2, depth));
-            for (int curr_leaf_pos = 0; curr_leaf_pos < l; curr_leaf_pos++) {
-                if (save_n[depth][curr_leaf_pos] > 0) {
-                    // calculate mean
+            for (int curr_node_pos = 0; curr_node_pos < l; curr_node_pos++) {
+                if (tree[depth][curr_node_pos].size_r > 0) {
+                    tree[depth][curr_node_pos].mean = get_mean(tree[depth][curr_node_pos].residuals,
+                        tree[depth][curr_node_pos].size_r);
                 }
             }
         }
@@ -326,29 +340,23 @@ int main(int argc, char* argv[])
         // 4. update y
 
         for (int i = 0; i < rows; i++) {
-            int curr_leaf = 0;
+            int curr_node = 0;
             float adjustment = 0;
 
             for (int depth = 1; depth < DEPTH; depth++) {
-                if (x[i] < save_means[depth][curr_leaf]) {
-                    adjustment = output_values[depth][curr_leaf];
-                    curr_leaf = (curr_leaf + 1) * 2 - 2;
-                    if (save_n[depth][curr_leaf] < 1) {
-                        break;
-                    }
-
-                } else {
-                    curr_leaf++;
-                    adjustment = output_values[depth][curr_leaf];
-                    curr_leaf = (curr_leaf + 1) * 2 - 2;
-                    if (save_n[depth][curr_leaf] < 1) {
-                        break;
-                    }
+                if (tree[depth][curr_node].size_r < 1) {
+                    break;
                 }
+                if (x[i] < tree[depth][curr_node].mean) {
+                    curr_node++;
+                }
+
+                adjustment = tree[depth][curr_node].output_value;
+                curr_node = (curr_node + 1) * 2 - 2;
             }
 
-			old_y[i] = y[i];
-			y[i] = y[i] + learning_rate * adjustment;
+            old_y[i] = y[i];
+            y[i] = y[i] + learning_rate * adjustment;
         }
     }
 
