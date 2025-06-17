@@ -212,41 +212,39 @@ int main(int argc, char* argv[])
     struct node nodes_0[1] = {
         { x, 0, rows, rows, 0, 0 }
     };
+    struct node node_e = { 0, 0, 0, 0, 0, 0 };
 
     nodes_0[0].mean = get_mean(nodes_0[0].values, nodes_0[0].size_v);
 
-    // float* save_nodes[DEPTH][max_nodes];
-    // float save_means[DEPTH][max_nodes];
-    // float save_output_value[DEPTH][max_nodes];
-    // int save_n[DEPTH][max_nodes];
-    // for (int i = 0; i < DEPTH; i++) {
+    tree[0] = malloc(sizeof(nodes_0));
+    tree[0] = nodes_0;
 
-    //     for (int j = 0; j < max_nodes; j++) {
-    //         save_n[i][j] = 0;
-    //         save_means[i][j] = 0;
-    //         save_nodes[i][j] = x;
-    //     }
-    // }
+    for (int depth = 1; depth < DEPTH; depth++) {
+        int l = round(pow(2, depth));
+        tree[depth] = malloc(l * sizeof(node_e));
 
-    // save_n[0][0] = rows;
-    // save_nodes[0][0] = x;
-    // save_means[0][0] = x_mean;
+        for (int curr_node_pos = 0; curr_node_pos < l; curr_node_pos++) {
+
+            tree[depth][curr_node_pos] = node_e;
+            tree[depth][curr_node_pos].values = malloc(rows * sizeof(float));
+            tree[depth][curr_node_pos].values[0] = 0;
+            tree[depth][curr_node_pos].residuals = malloc(rows * sizeof(float));
+            tree[depth][curr_node_pos].residuals[0] = 0;
+        }
+    }
 
     for (int depth = 1; depth < DEPTH; depth++) {
         int l = round(pow(2, depth));
 
         // for the number of nodes in x depth
         for (int curr_node_pos = 0; curr_node_pos < l; curr_node_pos++) {
-            // find mean
-
-            tree[depth - 1][curr_node_pos].mean = get_mean(tree[depth - 1][curr_node_pos].values,
-                tree[depth - 1][curr_node_pos].size_v);
+            int l_count = 0;
+            int r_count = 0;
+			printf("depth %d, node %d\n", depth, curr_node_pos);
 
             // and split elements for the next depth
             for (int i = 0; i < tree[depth - 1][curr_node_pos].size_v; i++) {
                 int next_node_pos = (curr_node_pos + 1) * 2 - 1;
-                int l_count = 0;
-                int r_count = 0;
 
                 if (tree[depth - 1][curr_node_pos].values[i] < tree[depth - 1][curr_node_pos].mean) {
                     // left branch
@@ -261,6 +259,15 @@ int main(int argc, char* argv[])
                 }
             }
         }
+
+        for (int curr_node_pos = 0; curr_node_pos < l; curr_node_pos++) {
+			for (int i = 1; i > -1; i--) {
+                int next_node_pos = (curr_node_pos + 1) * 2 - 1;
+
+				tree[depth][next_node_pos - i].mean = get_mean(tree[depth][next_node_pos - i].values, 
+						tree[depth][next_node_pos].size_v);
+			}
+		}
     }
 
     /*
