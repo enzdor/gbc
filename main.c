@@ -17,14 +17,76 @@
 #define TRAIN_TIME 2
 #define DEPTH 5 // number of stumps
 
-struct node {
+typedef struct {
     float* values;
-    float* residuals;
-    int size_v;
-    int size_r;
+    size_t occupied;
+    size_t capacity;
+} dynamic_array;
+
+void init_array(dynamic_array* arr, size_t initial_size)
+{
+    arr->values = malloc(initial_size * sizeof(float));
+    arr->occupied = 0;
+    arr->capacity = initial_size;
+}
+
+void reset_array(dynamic_array* arr)
+{
+    free(arr->values);
+    init_array(arr, 0);
+}
+
+void add_element(dynamic_array* arr, float element)
+{
+    if (arr->capacity == 0) {
+        arr->capacity = 1;
+    } else if (arr->occupied >= arr->capacity) {
+        arr->capacity *= 2;
+        arr->values = realloc(arr->values, arr->capacity * sizeof(*arr->values));
+    }
+
+    arr->values[arr->occupied++] = element;
+}
+
+struct data {
+    dynamic_array x;
+    dynamic_array y;
+    dynamic_array old_y;
+    dynamic_array og_y;
+    dynamic_array residuals;
+};
+
+struct node {
+    dynamic_array xs;
+    dynamic_array residuals;
     float mean;
     float output_value;
 };
+
+typedef struct {
+    struct node* nodes;
+    size_t occupied;
+    size_t capacity;
+} nodes_in_depth;
+
+void init_depth_nodes(nodes_in_depth* nodes, size_t initial_size)
+{
+    nodes->nodes = malloc(initial_size * sizeof(struct node));
+    nodes->occupied = 0;
+    nodes->capacity = initial_size;
+}
+
+void add_node(nodes_in_depth* arr, struct node element)
+{
+    if (arr->capacity == 0) {
+        arr->capacity = 1;
+    } else if (arr->occupied >= arr->capacity) {
+        arr->capacity *= 2;
+        arr->nodes = realloc(arr->nodes, arr->capacity * sizeof(*arr->nodes));
+    }
+
+    arr->nodes[arr->occupied++] = element;
+}
 
 int get_n_columns(char* line)
 {
@@ -115,24 +177,14 @@ int main(int argc, char* argv[])
     // number of observations
     int rows = get_n_rows(fp);
 
-    float y_sum = 0, x_sum = 0, y_mean, x_mean, learning_rate;
-    learning_rate = 0.8;
+    float y_sum = 0, x_sum = 0, y_mean = 0, learning_rate = 0.1;
 
-    float x[rows];
-    float y[rows];
-    float og_y[rows];
-    float old_y[rows];
-    float residuals[rows];
-    float residuals_predictions[rows];
+    struct data d;
 
-    for (int i = 0; i < rows; i++) {
-        x[i] = 0;
-        y[i] = 0;
-        og_y[i] = 0;
-        old_y[i] = 0;
-        residuals[i] = 0;
-        residuals_predictions[i] = 0;
-    }
+    init_array(&d.x, rows);
+    init_array(&d.y, rows);
+    init_array(&d.og_y, rows);
+    init_array(&d.old_y, rows);
 
     size_t read = 0;
     free(line);
@@ -151,7 +203,7 @@ int main(int argc, char* argv[])
      *
      */
 
-    for (int i = 0; (read = getline(&line, &line_len, fp)) != -1; i++) {
+    for (; (read = getline(&line, &line_len, fp)) != -1;) {
         for (int j = 1; j <= 2; j++) {
             char* tmp = strdup(line);
             if (tmp == NULL) {
@@ -164,12 +216,12 @@ int main(int argc, char* argv[])
             float el = atof(get_csv_element(tmp, j));
 
             if (j == 1) {
-                y[i] = el;
-                og_y[i] = el;
-                old_y[i] = el;
+                add_element(&d.y, el);
+                add_element(&d.old_y, el);
+                add_element(&d.og_y, el);
             }
             if (j == 2) {
-                x[i] = el;
+                add_element(&d.x, el);
             }
             free(tmp);
         }
@@ -181,15 +233,6 @@ int main(int argc, char* argv[])
     if (errno != 0) {
         fprintf(stderr, "error in getline: %s\n", strerror(errno));
         exit(EXIT_FAILURE);
-    }
-
-    // calculate mean
-    y_mean = get_mean(y, rows);
-    x_mean = get_mean(x, rows);
-
-    // set mean and y as mean
-    for (int i = 0; i < rows; i++) {
-        y[i] = y_mean;
     }
 
     /*
@@ -207,67 +250,48 @@ int main(int argc, char* argv[])
      */
 
     int max_nodes = round(pow(2, DEPTH));
-    struct node* tree[DEPTH];
+    nodes_in_depth tree[DEPTH];
 
-    struct node nodes_0[1] = {
-        { x, 0, rows, rows, 0, 0 }
-    };
-    struct node node_e = { 0, 0, 0, 0, 0, 0 };
+    for (int i = 0; i < DEPTH; i++) {
+        int l = round(pow(2, i));
+        init_depth_nodes(&tree[i], l);
 
-    nodes_0[0].mean = get_mean(nodes_0[0].values, nodes_0[0].size_v);
-
-    tree[0] = malloc(sizeof(nodes_0));
-    tree[0] = nodes_0;
-
-    for (int depth = 1; depth < DEPTH; depth++) {
-        int l = round(pow(2, depth));
-        tree[depth] = malloc(l * sizeof(node_e));
-
-        for (int curr_node_pos = 0; curr_node_pos < l; curr_node_pos++) {
-
-            tree[depth][curr_node_pos] = node_e;
-            tree[depth][curr_node_pos].values = malloc(rows * sizeof(float));
-            tree[depth][curr_node_pos].values[0] = 0;
-            tree[depth][curr_node_pos].residuals = malloc(rows * sizeof(float));
-            tree[depth][curr_node_pos].residuals[0] = 0;
+        for (int j = 0; j < l; j++) {
+            struct node empty;
+            add_node(&tree[i], empty);
+            init_array(&tree[i].nodes[j].xs, 0);
+            init_array(&tree[i].nodes[j].residuals, 0);
+            tree[i].nodes[j].mean = 0;
+            tree[i].nodes[j].output_value = 0;
         }
+    }
+
+    for (int i = 0; i < d.x.occupied; i++) {
+        add_element(&tree[0].nodes[0].xs, d.x.values[i]);
     }
 
     for (int depth = 1; depth < DEPTH; depth++) {
         int l = round(pow(2, depth));
 
         // for the number of nodes in x depth
-        for (int curr_node_pos = 0; curr_node_pos < l; curr_node_pos++) {
-            int l_count = 0;
-            int r_count = 0;
-			printf("depth %d, node %d\n", depth, curr_node_pos);
+        for (int curr_node_pos = 0; curr_node_pos < tree[depth - 1].occupied; curr_node_pos++) {
+            // find mean?
+            tree[depth - 1].nodes[curr_node_pos].mean = get_mean(tree[depth - 1].nodes[curr_node_pos].xs.values,
+                tree[depth - 1].nodes[curr_node_pos].xs.occupied);
 
             // and split elements for the next depth
-            for (int i = 0; i < tree[depth - 1][curr_node_pos].size_v; i++) {
+            for (int i = 0; i < tree[depth - 1].nodes[curr_node_pos].xs.occupied; i++) {
                 int next_node_pos = (curr_node_pos + 1) * 2 - 1;
 
-                if (tree[depth - 1][curr_node_pos].values[i] < tree[depth - 1][curr_node_pos].mean) {
+                if (tree[depth - 1].nodes[curr_node_pos].xs.values[i] < tree[depth - 1].nodes[curr_node_pos].mean) {
                     // left branch
-                    tree[depth][next_node_pos - 1].values[l_count] = tree[depth - 1][curr_node_pos].values[i];
-                    tree[depth][next_node_pos - 1].size_v++;
-                    l_count++;
+                    add_element(&tree[depth].nodes[next_node_pos - 1].xs, tree[depth - 1].nodes[curr_node_pos].xs.values[i]);
                 } else {
                     // right branch
-                    tree[depth][next_node_pos].values[r_count] = tree[depth - 1][curr_node_pos].values[i];
-                    tree[depth][next_node_pos].size_v++;
-                    r_count++;
+                    add_element(&tree[depth].nodes[next_node_pos].xs, tree[depth - 1].nodes[curr_node_pos].xs.values[i]);
                 }
             }
         }
-
-        for (int curr_node_pos = 0; curr_node_pos < l; curr_node_pos++) {
-			for (int i = 1; i > -1; i--) {
-                int next_node_pos = (curr_node_pos + 1) * 2 - 1;
-
-				tree[depth][next_node_pos - i].mean = get_mean(tree[depth][next_node_pos - i].values, 
-						tree[depth][next_node_pos].size_v);
-			}
-		}
     }
 
     /*
@@ -275,7 +299,8 @@ int main(int argc, char* argv[])
      *
      *
      *
-     *
+     * free x and residuals from tree?
+     * need to free something for sure
      * trim unused nodes
      *
      *
@@ -304,30 +329,35 @@ int main(int argc, char* argv[])
     time_t secs = TRAIN_TIME;
     time_t start_time = time(NULL);
 
+    // a. init y as y mean
+
+    y_mean = get_mean(d.y.values, d.y.occupied);
+
+    for (int i = 0; i < d.y.occupied; i++) {
+        d.y.values[i] = y_mean;
+    }
+
     while (time(NULL) - start_time < secs) {
         // 1. compute pseudo residuals
         for (int i = 0; i < rows; i++) {
-            residuals[i] = old_y[i] - y[i];
+            add_element(&d.residuals, d.old_y.values[i] - d.y.values[i]);
+            add_element(&tree[0].nodes[0].residuals, d.old_y.values[i] - d.y.values[i]);
         }
 
         // 2. fit regression tree to the pseudo residuals
         // top to bottom in a big ass for loop
-        // save into an array
 
-        // initialize res_in_node;
-
-        tree[0][0].residuals = residuals;
-
-        for (int i = 0; i < rows; i++) {
+        // need to check if n of residuals, ys and xs are the same
+        for (int i = 0; i < d.x.occupied; i++) {
             int curr_node = 0;
             for (int depth = 1; depth < DEPTH; depth++) {
-                if (x[i] > tree[depth][curr_node].mean) {
+                curr_node = (curr_node + 1) * 2 - 2;
+                if (d.x.values[i] > tree[depth - 1].nodes[curr_node].mean) {
                     curr_node++;
                 }
 
                 // add res of x to residuals in the current node
-                tree[depth][curr_node].values[tree[depth][curr_node].size_r++] = residuals[i];
-                curr_node = (curr_node + 1) * 2 - 2;
+                add_element(&tree[depth].nodes[curr_node].residuals, d.residuals.values[i]);
             }
         }
 
@@ -337,9 +367,10 @@ int main(int argc, char* argv[])
         for (int depth = 0; depth < DEPTH; depth++) {
             int l = round(pow(2, depth));
             for (int curr_node_pos = 0; curr_node_pos < l; curr_node_pos++) {
-                if (tree[depth][curr_node_pos].size_r > 0) {
-                    tree[depth][curr_node_pos].mean = get_mean(tree[depth][curr_node_pos].residuals,
-                        tree[depth][curr_node_pos].size_r);
+                if (tree[depth].nodes[curr_node_pos].residuals.occupied > 0) {
+                    tree[depth].nodes[curr_node_pos].output_value = get_mean(
+                        tree[depth].nodes[curr_node_pos].residuals.values,
+                        tree[depth].nodes[curr_node_pos].residuals.occupied);
                 }
             }
         }
@@ -350,20 +381,21 @@ int main(int argc, char* argv[])
             int curr_node = 0;
             float adjustment = 0;
 
-            for (int depth = 1; depth < DEPTH; depth++) {
-                if (tree[depth][curr_node].size_r < 1) {
+            for (int depth = 0; depth < DEPTH; depth++) {
+                if (tree[depth].nodes[curr_node].residuals.occupied < 1) {
                     break;
                 }
-                if (x[i] < tree[depth][curr_node].mean) {
+
+                adjustment = tree[depth].nodes[curr_node].output_value;
+
+                curr_node = (curr_node + 1) * 2 - 2;
+                if (d.x.values[i] > tree[depth].nodes[curr_node].mean) {
                     curr_node++;
                 }
-
-                adjustment = tree[depth][curr_node].output_value;
-                curr_node = (curr_node + 1) * 2 - 2;
             }
 
-            old_y[i] = y[i];
-            y[i] = y[i] + learning_rate * adjustment;
+            d.old_y.values[i] = d.y.values[i];
+            d.y.values[i] = d.y.values[i] + learning_rate * adjustment;
         }
     }
 
