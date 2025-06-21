@@ -14,7 +14,7 @@
 #include <time.h>
 #include <unistd.h>
 
-#define TRAIN_TIME 2
+#define TRAIN_TIME 300
 #define DEPTH 5 // number of stumps
 
 typedef struct {
@@ -25,6 +25,10 @@ typedef struct {
 
 void init_array(dynamic_array* arr, size_t initial_size)
 {
+    if (initial_size < 1) {
+        initial_size = 1;
+    }
+
     arr->values = malloc(initial_size * sizeof(float));
     arr->occupied = 0;
     arr->capacity = initial_size;
@@ -33,7 +37,13 @@ void init_array(dynamic_array* arr, size_t initial_size)
 void reset_array(dynamic_array* arr)
 {
     free(arr->values);
-    init_array(arr, 0);
+
+    if (errno != 0) {
+        fprintf(stderr, "error in free: %s\n", strerror(errno));
+        exit(EXIT_FAILURE);
+    }
+
+    init_array(arr, 1);
 }
 
 void add_element(dynamic_array* arr, float element)
@@ -65,14 +75,14 @@ struct node {
 
 typedef struct {
     struct node* nodes;
-    size_t occupied;
+    size_t n_nodes;
     size_t capacity;
 } nodes_in_depth;
 
 void init_depth_nodes(nodes_in_depth* nodes, size_t initial_size)
 {
     nodes->nodes = malloc(initial_size * sizeof(struct node));
-    nodes->occupied = 0;
+    nodes->n_nodes = 0;
     nodes->capacity = initial_size;
 }
 
@@ -80,12 +90,24 @@ void add_node(nodes_in_depth* arr, struct node element)
 {
     if (arr->capacity == 0) {
         arr->capacity = 1;
-    } else if (arr->occupied >= arr->capacity) {
+    } else if (arr->n_nodes >= arr->capacity) {
         arr->capacity *= 2;
         arr->nodes = realloc(arr->nodes, arr->capacity * sizeof(*arr->nodes));
     }
 
-    arr->nodes[arr->occupied++] = element;
+    arr->nodes[arr->n_nodes++] = element;
+}
+
+void free_tree(nodes_in_depth* tree, int depth_count)
+{
+    for (int i = 0; i < depth_count; i++) {
+        int l = round(pow(2, i));
+        for (int j = 0; j < l; j++) {
+            free(tree[i].nodes[j].xs.values);
+            free(tree[i].nodes[j].residuals.values);
+        }
+        free(tree[i].nodes);
+    }
 }
 
 int get_n_columns(char* line)
@@ -129,6 +151,7 @@ const char* get_csv_element(char* line, int num)
 
 float get_mean(float* vals, int len)
 {
+	if (len < 1) return 0;
     float sum = 0;
 
     for (int i = 0; i < len; i++) {
@@ -185,6 +208,7 @@ int main(int argc, char* argv[])
     init_array(&d.y, rows);
     init_array(&d.og_y, rows);
     init_array(&d.old_y, rows);
+    init_array(&d.residuals, 1);
 
     size_t read = 0;
     free(line);
@@ -249,18 +273,17 @@ int main(int argc, char* argv[])
      *
      */
 
-    int max_nodes = round(pow(2, DEPTH));
     nodes_in_depth tree[DEPTH];
+    struct node empty = { 0 };
 
     for (int i = 0; i < DEPTH; i++) {
         int l = round(pow(2, i));
         init_depth_nodes(&tree[i], l);
 
         for (int j = 0; j < l; j++) {
-            struct node empty;
             add_node(&tree[i], empty);
-            init_array(&tree[i].nodes[j].xs, 0);
-            init_array(&tree[i].nodes[j].residuals, 0);
+            init_array(&tree[i].nodes[j].xs, 1);
+            init_array(&tree[i].nodes[j].residuals, 1);
             tree[i].nodes[j].mean = 0;
             tree[i].nodes[j].output_value = 0;
         }
@@ -271,52 +294,34 @@ int main(int argc, char* argv[])
     }
 
     for (int depth = 1; depth < DEPTH; depth++) {
-        int l = round(pow(2, depth));
-
         // for the number of nodes in x depth
-        for (int curr_node_pos = 0; curr_node_pos < tree[depth - 1].occupied; curr_node_pos++) {
-            // find mean?
+        for (int curr_node_pos = 0; curr_node_pos < tree[depth - 1].n_nodes; curr_node_pos++) {
+            // find mean
             tree[depth - 1].nodes[curr_node_pos].mean = get_mean(tree[depth - 1].nodes[curr_node_pos].xs.values,
                 tree[depth - 1].nodes[curr_node_pos].xs.occupied);
 
             // and split elements for the next depth
             for (int i = 0; i < tree[depth - 1].nodes[curr_node_pos].xs.occupied; i++) {
-                int next_node_pos = (curr_node_pos + 1) * 2 - 1;
+                int left_child = curr_node_pos * 2;
+                int right_child = curr_node_pos * 2 + 1;
+
+                // make sure number of nodes is not exceeded
+                if (left_child >= tree[depth].capacity || right_child >= tree[depth].capacity) {
+                    continue;
+                }
 
                 if (tree[depth - 1].nodes[curr_node_pos].xs.values[i] < tree[depth - 1].nodes[curr_node_pos].mean) {
                     // left branch
-                    add_element(&tree[depth].nodes[next_node_pos - 1].xs, tree[depth - 1].nodes[curr_node_pos].xs.values[i]);
+                    add_element(&tree[depth].nodes[left_child].xs, tree[depth - 1].nodes[curr_node_pos].xs.values[i]);
                 } else {
                     // right branch
-                    add_element(&tree[depth].nodes[next_node_pos].xs, tree[depth - 1].nodes[curr_node_pos].xs.values[i]);
+                    add_element(&tree[depth].nodes[right_child].xs, tree[depth - 1].nodes[curr_node_pos].xs.values[i]);
                 }
             }
         }
     }
 
     /*
-     *
-     *
-     *
-     *
-     * free x and residuals from tree?
-     * need to free something for sure
-     * trim unused nodes
-     *
-     *
-     *
-     *
-     *
-     */
-
-    /*
-     *
-     *
-     *
-     *
-     *
-     *
-     *
      *
      *
      *
@@ -338,26 +343,56 @@ int main(int argc, char* argv[])
     }
 
     while (time(NULL) - start_time < secs) {
+        reset_array(&d.residuals);
+
+        for (int i = 0; i < DEPTH; i++) {
+            int l = round(pow(2, i));
+            for (int j = 0; j < l; j++) {
+                reset_array(&tree[i].nodes[j].residuals);
+            }
+        }
+
         // 1. compute pseudo residuals
         for (int i = 0; i < rows; i++) {
             add_element(&d.residuals, d.old_y.values[i] - d.y.values[i]);
             add_element(&tree[0].nodes[0].residuals, d.old_y.values[i] - d.y.values[i]);
         }
 
-        // 2. fit regression tree to the pseudo residuals
-        // top to bottom in a big ass for loop
+        if (!(d.y.occupied == d.residuals.occupied)) {
+            fprintf(stderr, "error in boosting: expected number of xs, ys, and residuals to be equal, got %lu %lu %lu\n",
+                d.residuals.occupied, d.y.occupied, d.x.occupied);
+            exit(EXIT_FAILURE);
+        }
 
-        // need to check if n of residuals, ys and xs are the same
+        // 2. fit regression tree to the pseudo residuals
         for (int i = 0; i < d.x.occupied; i++) {
             int curr_node = 0;
             for (int depth = 1; depth < DEPTH; depth++) {
                 curr_node = (curr_node + 1) * 2 - 2;
-                if (d.x.values[i] > tree[depth - 1].nodes[curr_node].mean) {
-                    curr_node++;
+				// check if node exists and has data
+                if (curr_node >= tree[depth - 1].n_nodes || tree[depth - 1].nodes[curr_node].xs.occupied < 1) {
+                    break;
                 }
 
-                // add res of x to residuals in the current node
-                add_element(&tree[depth].nodes[curr_node].residuals, d.residuals.values[i]);
+                // calculate child indices
+                int left_child = curr_node * 2;
+                int right_child = curr_node * 2 + 1;
+
+                // make sure children exist
+                if (left_child >= tree[depth].capacity || right_child >= tree[depth].capacity) {
+                    break;
+                }
+
+                if (d.x.values[i] <= tree[depth - 1].nodes[curr_node].mean) {
+                    curr_node = left_child;
+                } else {
+                    curr_node = right_child;
+                }
+
+                // add residual to the current node
+                if (curr_node < tree[depth].n_nodes) {
+                    add_element(&tree[depth].nodes[curr_node].residuals, d.residuals.values[i]);
+                }
             }
         }
 
@@ -376,22 +411,36 @@ int main(int argc, char* argv[])
         }
 
         // 4. update y
-
         for (int i = 0; i < rows; i++) {
             int curr_node = 0;
-            float adjustment = 0;
+            float adjustment = tree[0].nodes[0].output_value;
 
-            for (int depth = 0; depth < DEPTH; depth++) {
-                if (tree[depth].nodes[curr_node].residuals.occupied < 1) {
+            for (int depth = 1; depth < DEPTH; depth++) {
+                // Check bounds before accessing
+                if (curr_node >= tree[depth - 1].n_nodes || tree[depth - 1].nodes[curr_node].xs.occupied < 1) {
                     break;
                 }
 
-                adjustment = tree[depth].nodes[curr_node].output_value;
+                // Calculate child indices
+                int left_child = curr_node * 2;
+                int right_child = curr_node * 2 + 1;
 
-                curr_node = (curr_node + 1) * 2 - 2;
-                if (d.x.values[i] > tree[depth].nodes[curr_node].mean) {
-                    curr_node++;
+                // Check child bounds
+                if (left_child >= tree[depth].capacity || right_child >= tree[depth].capacity) {
+                    break;
                 }
+
+                if (d.x.values[i] <= tree[depth - 1].nodes[curr_node].mean) {
+                    curr_node = left_child;
+                } else {
+                    curr_node = right_child;
+                }
+
+                // use adjustment from this node if it has residuals
+                if (curr_node < tree[depth].n_nodes && tree[depth].nodes[curr_node].residuals.occupied > 0) {
+                    adjustment = tree[depth].nodes[curr_node].output_value;
+                }
+				printf("%f \n", adjustment);
             }
 
             d.old_y.values[i] = d.y.values[i];
@@ -399,8 +448,19 @@ int main(int argc, char* argv[])
         }
     }
 
-    // for (int i = 0; i < inn.og_y.occupied; i++) {
-    //     printf("real y %f\n", inn.og_y.values[i]);
-    //     printf("predicted y %f and old y %f\n", inn.y.values[i], inn.old_y.values[i]);
-    // }
+    for (int i = 0; i < d.og_y.occupied; i++) {
+        printf("predicted y %f and old y %f\n", d.y.values[i], d.og_y.values[i]);
+    }
+
+    free(d.x.values);
+    free(d.y.values);
+    free(d.og_y.values);
+    free(d.old_y.values);
+    free(d.residuals.values);
+
+    free_tree(tree, DEPTH);
+
+    return 0;
+
+
 }
