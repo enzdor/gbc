@@ -16,12 +16,47 @@
 
 #define TRAIN_TIME 3
 #define DEPTH 5 // number of stumps
+#define TERMINAL_NODES 2
 
 typedef struct {
     float* values;
     size_t occupied;
     size_t capacity;
 } dynamic_array;
+
+struct data {
+    dynamic_array x;
+    dynamic_array y;
+    dynamic_array old_y;
+    dynamic_array og_y;
+    dynamic_array residuals;
+};
+
+struct node {
+    dynamic_array xs;
+    dynamic_array residuals;
+    dynamic_array quantile_means;
+    float output_value;
+};
+
+typedef struct {
+    struct node* nodes;
+    size_t n_nodes;
+    size_t capacity;
+} nodes_in_depth;
+
+float get_mean(float* vals, int len)
+{
+    if (len < 1)
+        return 0;
+    float sum = 0;
+
+    for (int i = 0; i < len; i++) {
+        sum += vals[i];
+    }
+
+    return sum / len;
+}
 
 void init_array(dynamic_array* arr, size_t initial_size)
 {
@@ -58,27 +93,6 @@ void add_element(dynamic_array* arr, float element)
     arr->values[arr->occupied++] = element;
 }
 
-struct data {
-    dynamic_array x;
-    dynamic_array y;
-    dynamic_array old_y;
-    dynamic_array og_y;
-    dynamic_array residuals;
-};
-
-struct node {
-    dynamic_array xs;
-    dynamic_array residuals;
-    float mean;
-    float output_value;
-};
-
-typedef struct {
-    struct node* nodes;
-    size_t n_nodes;
-    size_t capacity;
-} nodes_in_depth;
-
 void init_depth_nodes(nodes_in_depth* nodes, size_t initial_size)
 {
     nodes->nodes = malloc(initial_size * sizeof(struct node));
@@ -98,6 +112,87 @@ void add_node(nodes_in_depth* arr, struct node element)
     arr->nodes[arr->n_nodes++] = element;
 }
 
+void create_tree(nodes_in_depth** tree, int depth, int terminal_nodes)
+{
+    struct node empty = { 0 };
+    if (terminal_nodes < 2) {
+        terminal_nodes = 2;
+    }
+
+    for (int i = 0; i < depth; i++) {
+        int l = terminal_nodes * i;
+        if (i == 0) {
+            l = 1;
+        }
+
+        init_depth_nodes(tree[i], l);
+
+        for (int j = 0; j < l; j++) {
+            add_node(tree[i], empty);
+            init_array(&tree[i]->nodes[j].xs, 1);
+            init_array(&tree[i]->nodes[j].residuals, 1);
+            init_array(&tree[i]->nodes[j].quantile_means, 1);
+            tree[i]->nodes[j].output_value = 0;
+        }
+    }
+}
+
+// add minimum nuber of values for node to exist if not delete
+void build_tree(nodes_in_depth** tree, int depth, int terminal_nodes)
+{
+    for (int depth = 1; depth < DEPTH; depth++) {
+        // for the number of nodes in x depth
+        for (int curr_node_pos = 0; curr_node_pos < tree[depth - 1]->n_nodes; curr_node_pos++) {
+            // find quantile_means
+            float n_size = round(100.0f / terminal_nodes * tree[depth - 1]->nodes[curr_node_pos].xs.occupied);
+            int l_range = 0;
+            int r_range = 0;
+
+            // calculate means
+            for (int i = 0; i < terminal_nodes; i++) {
+                r_range = n_size * (i + 1) + l_range;
+                if (i == terminal_nodes - 1) {
+                    r_range = tree[depth - 1]->nodes[curr_node_pos].xs.occupied - 1;
+                }
+
+                if (r_range >= tree[depth - 1]->nodes[curr_node_pos].xs.occupied) {
+                    fprintf(stderr, "error in build_tree: tried to access out of range, array size %lu index give %d\n",
+                        tree[depth - 1]->nodes[curr_node_pos].xs.occupied, r_range);
+                    exit(EXIT_FAILURE);
+                }
+
+                float sum = 0;
+                int n = r_range - l_range;
+                for (int j = 0; j < n; j++) {
+                    sum += tree[depth - 1]->nodes[curr_node_pos].xs.values[i];
+                }
+                float mean = sum / n;
+
+                l_range = r_range + 1;
+                add_element(&tree[depth - 1]->nodes[curr_node_pos].quantile_means, mean);
+            }
+
+            // and split elements for the next depth
+            for (int i = 0; i < tree[depth - 1]->nodes[curr_node_pos].xs.occupied; i++) {
+                for (int j = 0; j < terminal_nodes; j++) {
+                    int child = curr_node_pos * 2 + j;
+
+                    // make sure number of nodes is not exceeded
+                    if (child >= tree[depth]->capacity) {
+                        continue;
+                    }
+
+                    if (tree[depth - 1]->nodes[curr_node_pos].xs.values[i]
+                        < tree[depth - 1]->nodes[curr_node_pos].quantile_means.values[j]) {
+                        // left branch
+                        add_element(&tree[depth]->nodes[child].xs, tree[depth - 1]->nodes[curr_node_pos].xs.values[i]);
+                    }
+                }
+            }
+        }
+    }
+}
+
 void free_tree(nodes_in_depth* tree, int depth_count)
 {
     for (int i = 0; i < depth_count; i++) {
@@ -105,6 +200,7 @@ void free_tree(nodes_in_depth* tree, int depth_count)
         for (int j = 0; j < l; j++) {
             free(tree[i].nodes[j].xs.values);
             free(tree[i].nodes[j].residuals.values);
+            free(tree[i].nodes[j].quantile_means.values);
         }
         free(tree[i].nodes);
     }
@@ -147,19 +243,6 @@ const char* get_csv_element(char* line, int num)
     }
 
     return NULL;
-}
-
-float get_mean(float* vals, int len)
-{
-    if (len < 1)
-        return 0;
-    float sum = 0;
-
-    for (int i = 0; i < len; i++) {
-        sum += vals[i];
-    }
-
-    return sum / len;
 }
 
 int main(int argc, char* argv[])
@@ -274,53 +357,14 @@ int main(int argc, char* argv[])
      *
      */
 
-    nodes_in_depth tree[DEPTH];
-    struct node empty = { 0 };
-
-    for (int i = 0; i < DEPTH; i++) {
-        int l = round(pow(2, i));
-        init_depth_nodes(&tree[i], l);
-
-        for (int j = 0; j < l; j++) {
-            add_node(&tree[i], empty);
-            init_array(&tree[i].nodes[j].xs, 1);
-            init_array(&tree[i].nodes[j].residuals, 1);
-            tree[i].nodes[j].mean = 0;
-            tree[i].nodes[j].output_value = 0;
-        }
-    }
+    nodes_in_depth* tree;
+    create_tree(&tree, DEPTH, TERMINAL_NODES);
 
     for (int i = 0; i < d.x.occupied; i++) {
         add_element(&tree[0].nodes[0].xs, d.x.values[i]);
     }
 
-    for (int depth = 1; depth < DEPTH; depth++) {
-        // for the number of nodes in x depth
-        for (int curr_node_pos = 0; curr_node_pos < tree[depth - 1].n_nodes; curr_node_pos++) {
-            // find mean
-            tree[depth - 1].nodes[curr_node_pos].mean = get_mean(tree[depth - 1].nodes[curr_node_pos].xs.values,
-                tree[depth - 1].nodes[curr_node_pos].xs.occupied);
-
-            // and split elements for the next depth
-            for (int i = 0; i < tree[depth - 1].nodes[curr_node_pos].xs.occupied; i++) {
-                int left_child = curr_node_pos * 2;
-                int right_child = curr_node_pos * 2 + 1;
-
-                // make sure number of nodes is not exceeded
-                if (left_child >= tree[depth].capacity || right_child >= tree[depth].capacity) {
-                    continue;
-                }
-
-                if (tree[depth - 1].nodes[curr_node_pos].xs.values[i] < tree[depth - 1].nodes[curr_node_pos].mean) {
-                    // left branch
-                    add_element(&tree[depth].nodes[left_child].xs, tree[depth - 1].nodes[curr_node_pos].xs.values[i]);
-                } else {
-                    // right branch
-                    add_element(&tree[depth].nodes[right_child].xs, tree[depth - 1].nodes[curr_node_pos].xs.values[i]);
-                }
-            }
-        }
-    }
+    build_tree(&tree, DEPTH, 2);
 
     /*
      *
@@ -372,46 +416,58 @@ int main(int argc, char* argv[])
         for (int i = 0; i < d.x.occupied; i++) {
             int curr_node = 0;
             for (int depth = 1; depth < DEPTH; depth++) {
-                // check if node exists and has data
-                if (curr_node >= tree[depth - 1].n_nodes || tree[depth - 1].nodes[curr_node].xs.occupied < 1) {
+                int pls_break = 0;
+                if (pls_break == 1) {
                     break;
                 }
 
-                // calculate child indices
-                int left_child = curr_node * 2;
-                int right_child = curr_node * 2 + 1;
+                for (int j = 0; j < TERMINAL_NODES; j++) {
+                    // check if node exists and has data
+                    if (curr_node >= tree[depth - 1].n_nodes || tree[depth - 1].nodes[curr_node].xs.occupied < 1) {
+                        pls_break = 1;
+                        break;
+                    }
 
-                // make sure children exist
-                if (left_child >= tree[depth].capacity || right_child >= tree[depth].capacity) {
-                    break;
-                }
+                    int child = curr_node * 2 + j;
 
-                if (d.x.values[i] <= tree[depth - 1].nodes[curr_node].mean) {
-                    curr_node = left_child;
-                } else {
-                    curr_node = right_child;
-                }
+                    // make sure children exist
+                    if (child >= tree[depth].capacity) {
+                        break;
+                    }
 
-                // add residual to the current node
-                if (curr_node < tree[depth].n_nodes) {
-                    add_element(&tree[depth].nodes[curr_node].residuals, d.residuals.values[i]);
+                    // add residual to the current node
+                    if (d.x.values[i] <= tree[depth - 1].nodes[curr_node].quantile_means.values[j]) {
+                        curr_node = child;
+                        if (curr_node < tree[depth].n_nodes) {
+                            add_element(&tree[depth].nodes[curr_node].residuals, d.residuals.values[i]);
+                        }
+                        // if last node, add it to it
+                    } else if (j == TERMINAL_NODES - 1) {
+                        curr_node = child;
+                        if (curr_node < tree[depth].n_nodes) {
+                            add_element(&tree[depth].nodes[curr_node].residuals, d.residuals.values[i]);
+                        }
+                    }
                 }
             }
         }
 
         // 3. for each node, compute output value
         // (mean of residuals in node)
-        printf("%f a residual\n", tree[1].nodes[0].residuals.values[1]);
         for (int depth = 0; depth < DEPTH; depth++) {
-            int l = round(pow(2, depth));
+            int l = TERMINAL_NODES * depth;
+            if (depth == 0) {
+                l = 1;
+            }
+
             for (int curr_node_pos = 0; curr_node_pos < l; curr_node_pos++) {
                 if (tree[depth].nodes[curr_node_pos].residuals.occupied > 0) {
                     tree[depth].nodes[curr_node_pos].output_value = get_mean(
                         tree[depth].nodes[curr_node_pos].residuals.values,
                         tree[depth].nodes[curr_node_pos].residuals.occupied);
                 } else {
-					tree[depth].nodes[curr_node_pos].output_value = 0;
-				}
+                    tree[depth].nodes[curr_node_pos].output_value = 0;
+                }
             }
         }
 
@@ -419,31 +475,39 @@ int main(int argc, char* argv[])
         for (int i = 0; i < rows; i++) {
             int curr_node = 0;
             float adjustment = tree[0].nodes[0].output_value;
+            int pls_break = 0;
+            if (pls_break == 1) {
+                break;
+            }
 
             for (int depth = 1; depth < DEPTH; depth++) {
-                // Check bounds before accessing
-                if (curr_node >= tree[depth - 1].n_nodes || tree[depth - 1].nodes[curr_node].xs.occupied < 1) {
-                    break;
-                }
+                for (int j = 0; j < TERMINAL_NODES; j++) {
+                    // check if node exists and has data
+                    if (curr_node >= tree[depth - 1].n_nodes || tree[depth - 1].nodes[curr_node].xs.occupied < 1) {
+                        pls_break = 1;
+                        break;
+                    }
 
-                // Calculate child indices
-                int left_child = curr_node * 2;
-                int right_child = curr_node * 2 + 1;
+                    int child = curr_node * 2 + j;
 
-                // Check child bounds
-                if (left_child >= tree[depth].capacity || right_child >= tree[depth].capacity) {
-                    break;
-                }
+                    // make sure children exist
+                    if (child >= tree[depth].capacity) {
+                        break;
+                    }
 
-                if (d.x.values[i] <= tree[depth - 1].nodes[curr_node].mean) {
-                    curr_node = left_child;
-                } else {
-                    curr_node = right_child;
-                }
-
-                // use adjustment from this node if it has residuals
-                if (curr_node < tree[depth].n_nodes && tree[depth].nodes[curr_node].residuals.occupied > 0) {
-                    adjustment = tree[depth].nodes[curr_node].output_value;
+                    // use this ajdustment if less than quantile mean
+                    if (d.x.values[i] <= tree[depth - 1].nodes[curr_node].quantile_means.values[j]) {
+                        curr_node = child;
+                        if (curr_node < tree[depth].n_nodes && tree[depth].nodes[curr_node].residuals.occupied > 0) {
+                            adjustment = tree[depth].nodes[curr_node].output_value;
+                        }
+                        // if last node, use this residual
+                    } else if (j == TERMINAL_NODES - 1) {
+                        curr_node = child;
+                        if (curr_node < tree[depth].n_nodes && tree[depth].nodes[curr_node].residuals.occupied > 0) {
+                            adjustment = tree[depth].nodes[curr_node].output_value;
+                        }
+                    }
                 }
             }
 
