@@ -14,7 +14,7 @@
 #include <time.h>
 #include <unistd.h>
 
-#define TRAIN_TIME 300
+#define TRAIN_TIME 3
 #define DEPTH 5 // number of stumps
 
 typedef struct {
@@ -151,7 +151,8 @@ const char* get_csv_element(char* line, int num)
 
 float get_mean(float* vals, int len)
 {
-	if (len < 1) return 0;
+    if (len < 1)
+        return 0;
     float sum = 0;
 
     for (int i = 0; i < len; i++) {
@@ -340,6 +341,7 @@ int main(int argc, char* argv[])
 
     for (int i = 0; i < d.y.occupied; i++) {
         d.y.values[i] = y_mean;
+        d.old_y.values[i] = y_mean;
     }
 
     while (time(NULL) - start_time < secs) {
@@ -349,13 +351,15 @@ int main(int argc, char* argv[])
             int l = round(pow(2, i));
             for (int j = 0; j < l; j++) {
                 reset_array(&tree[i].nodes[j].residuals);
+                tree[i].nodes[j].output_value = 0;
             }
         }
 
         // 1. compute pseudo residuals
         for (int i = 0; i < rows; i++) {
-            add_element(&d.residuals, d.old_y.values[i] - d.y.values[i]);
-            add_element(&tree[0].nodes[0].residuals, d.old_y.values[i] - d.y.values[i]);
+            float residual = d.og_y.values[i] - d.y.values[i];
+            add_element(&d.residuals, residual);
+            add_element(&tree[0].nodes[0].residuals, residual);
         }
 
         if (!(d.y.occupied == d.residuals.occupied)) {
@@ -368,8 +372,7 @@ int main(int argc, char* argv[])
         for (int i = 0; i < d.x.occupied; i++) {
             int curr_node = 0;
             for (int depth = 1; depth < DEPTH; depth++) {
-                curr_node = (curr_node + 1) * 2 - 2;
-				// check if node exists and has data
+                // check if node exists and has data
                 if (curr_node >= tree[depth - 1].n_nodes || tree[depth - 1].nodes[curr_node].xs.occupied < 1) {
                     break;
                 }
@@ -398,7 +401,7 @@ int main(int argc, char* argv[])
 
         // 3. for each node, compute output value
         // (mean of residuals in node)
-
+        printf("%f a residual\n", tree[1].nodes[0].residuals.values[1]);
         for (int depth = 0; depth < DEPTH; depth++) {
             int l = round(pow(2, depth));
             for (int curr_node_pos = 0; curr_node_pos < l; curr_node_pos++) {
@@ -406,7 +409,9 @@ int main(int argc, char* argv[])
                     tree[depth].nodes[curr_node_pos].output_value = get_mean(
                         tree[depth].nodes[curr_node_pos].residuals.values,
                         tree[depth].nodes[curr_node_pos].residuals.occupied);
-                }
+                } else {
+					tree[depth].nodes[curr_node_pos].output_value = 0;
+				}
             }
         }
 
@@ -440,11 +445,13 @@ int main(int argc, char* argv[])
                 if (curr_node < tree[depth].n_nodes && tree[depth].nodes[curr_node].residuals.occupied > 0) {
                     adjustment = tree[depth].nodes[curr_node].output_value;
                 }
-				printf("%f \n", adjustment);
             }
 
             d.old_y.values[i] = d.y.values[i];
-            d.y.values[i] = d.y.values[i] + learning_rate * adjustment;
+            d.y.values[i] += learning_rate * adjustment;
+            if (i == 1) {
+                printf("predicted y %f old y %f and og y %f adj %f out occ %lu out cap %lu\n", d.y.values[i], d.old_y.values[i], d.og_y.values[i], adjustment, tree[3].nodes[0].residuals.occupied, tree[3].nodes[0].residuals.capacity);
+            }
         }
     }
 
@@ -461,6 +468,4 @@ int main(int argc, char* argv[])
     free_tree(tree, DEPTH);
 
     return 0;
-
-
 }

@@ -2,7 +2,10 @@
 
 ## TODO
 
-- add shallow decision trees (depth = 5) or regression trees as weak learners instead of stump, done?
+- stop confusing depth with j number of terminal nodes
+- find way to find best depth
+- create trees with variable j
+- create boosting function that works with trees of different depths and js
 - abstract some stuff one it all works
 - regularize data?
 - do boosting with more than one feature
